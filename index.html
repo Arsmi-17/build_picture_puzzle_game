@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en-us">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,height=device-height,initial-scale=1,user-scalable=no">
+<title>Unity Web Player | Puzzle</title>
+<style>
+html,body{
+margin:0;padding:0;width:100%;height:100%;
+overflow:hidden;background:#000;
+}
+#unity-container{
+position:fixed;inset:0;
+display:flex;
+justify-content:center;
+align-items:center;
+background:#000;
+}
+#unity-canvas{
+background:#000;
+}
+#unity-loading-bar{
+position:absolute;
+left:50%;top:50%;
+transform:translate(-50%,-50%);
+color:#fff;
+font-family:Arial,sans-serif;
+}
+</style>
+</head>
+<body>
+
+<div id="unity-container">
+<canvas id="unity-canvas" tabindex="-1"></canvas>
+
+<div id="unity-loading-bar">
+Loading...
+<div style="width:200px;height:8px;background:#333;margin-top:10px;">
+<div id="unity-progress-bar-full" style="height:100%;width:0%;background:#fff;"></div>
+</div>
+</div>
+</div>
+
+<script>
+const canvas=document.querySelector("#unity-canvas");
+
+function unityShowBanner(msg,type){
+console.log(msg);
+}
+
+const buildUrl="Build";
+
+const config={
+arguments:[],
+dataUrl:buildUrl+"/puzzle.data.unityweb",
+frameworkUrl:buildUrl+"/puzzle.framework.js.unityweb",
+codeUrl:buildUrl+"/puzzle.wasm.unityweb",
+streamingAssetsUrl:"StreamingAssets",
+companyName:"DefaultCompany",
+productName:"Puzzle",
+productVersion:"1.0",
+showBanner:unityShowBanner
+};
+
+function resizeCanvas(){
+const portraitRatio=1080/1920;
+const screenRatio=window.innerWidth/window.innerHeight;
+
+let w,h;
+
+if(screenRatio>portraitRatio){
+h=window.innerHeight;
+w=h*portraitRatio;
+}else{
+w=window.innerWidth;
+h=w/portraitRatio;
+}
+
+canvas.style.width=w+"px";
+canvas.style.height=h+"px";
+}
+
+window.addEventListener("resize",resizeCanvas);
+window.addEventListener("orientationchange",resizeCanvas);
+
+const script=document.createElement("script");
+script.src=buildUrl+"/puzzle.loader.js";
+
+script.onload=()=>{
+createUnityInstance(canvas,config,(progress)=>{
+document.querySelector("#unity-progress-bar-full").style.width=(progress*100)+"%";
+}).then(()=>{
+document.querySelector("#unity-loading-bar").style.display="none";
+resizeCanvas();
+}).catch(alert);
+};
+
+document.body.appendChild(script);
+</script>
+
+</body>
+</html>
