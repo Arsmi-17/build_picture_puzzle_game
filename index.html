@@ -63,11 +63,26 @@ Loading...
 var canvas = document.querySelector("#unity-canvas");
 var errorBox = document.querySelector("#unity-error");
 
+// Tell the embedding platform how far along we are. Without this it can only see
+// the iframe's load event -- which fires long before the engine has downloaded
+// and compiled -- so it hides its loading screen and the player sees a black
+// frame until Unity finally paints.
+function postToPlatform(type, payload) {
+  try {
+    if (window.parent && window.parent !== window) {
+      var msg = { type: type, ts: Date.now(), version: 1 };
+      for (var k in (payload || {})) msg[k] = payload[k];
+      window.parent.postMessage(msg, "*");
+    }
+  } catch (e) { /* not embedded, or blocked */ }
+}
+
 // Never swallow engine errors. The previous shell logged them to the console
 // only, so a failure on a phone looked like an unexplained black screen.
 function showError(msg) {
   errorBox.style.display = "block";
   errorBox.textContent = String(msg);
+  postToPlatform("gamehub:unity:error", { error: String(msg) });
 }
 function unityShowBanner(msg, type) {
   if (type === "error") showError(msg);
@@ -101,11 +116,15 @@ canvas.addEventListener("webglcontextlost", function (e) { e.preventDefault(); s
 var script = document.createElement("script");
 script.src = buildUrl + "/puzzle.loader.js";
 
+postToPlatform("gamehub:unity:progress", { progress: 0 });
+
 script.onload = function () {
   createUnityInstance(canvas, config, function (progress) {
     document.querySelector("#unity-progress-bar-full").style.width = (progress * 100) + "%";
+    postToPlatform("gamehub:unity:progress", { progress: progress });
   }).then(function () {
     document.querySelector("#unity-loading-bar").style.display = "none";
+    postToPlatform("gamehub:unity:ready", {});
   }).catch(function (err) {
     showError((err && err.message) || err);
   });
