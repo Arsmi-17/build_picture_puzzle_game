@@ -2,7 +2,7 @@
 <html lang="en-us">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,height=device-height,initial-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,height=device-height,initial-scale=1,user-scalable=no,viewport-fit=cover">
 <title>Unity Web Player | Puzzle</title>
 <style>
 html,body{
@@ -11,12 +11,15 @@ overflow:hidden;background:#000;
 }
 #unity-container{
 position:fixed;inset:0;
-display:flex;
-justify-content:center;
-align-items:center;
+overflow:hidden;
 background:#000;
 }
+/* Fill the frame edge to edge. The old shell pinned the canvas to a 1080x1920
+   box, which left black bars filling the rest of the screen. */
 #unity-canvas{
+display:block;
+width:100%;
+height:100%;
 background:#000;
 }
 #unity-loading-bar{
@@ -25,6 +28,19 @@ left:50%;top:50%;
 transform:translate(-50%,-50%);
 color:#fff;
 font-family:Arial,sans-serif;
+text-align:center;
+}
+#unity-error{
+position:absolute;
+left:50%;top:50%;
+transform:translate(-50%,-50%);
+display:none;
+max-width:88%;
+padding:14px 16px;
+border-radius:10px;
+background:#7f1d1d;
+color:#fff;
+font:13px/1.5 Arial,sans-serif;
 }
 </style>
 </head>
@@ -39,61 +55,62 @@ Loading...
 <div id="unity-progress-bar-full" style="height:100%;width:0%;background:#fff;"></div>
 </div>
 </div>
+
+<div id="unity-error"></div>
 </div>
 
 <script>
-const canvas=document.querySelector("#unity-canvas");
+var canvas = document.querySelector("#unity-canvas");
+var errorBox = document.querySelector("#unity-error");
 
-function unityShowBanner(msg,type){
-console.log(msg);
+// Never swallow engine errors. The previous shell logged them to the console
+// only, so a failure on a phone looked like an unexplained black screen.
+function showError(msg) {
+  errorBox.style.display = "block";
+  errorBox.textContent = String(msg);
 }
+function unityShowBanner(msg, type) {
+  if (type === "error") showError(msg);
+  console.log(msg);
+}
+window.addEventListener("error", function (e) { showError(e.message || "Runtime error"); });
 
-const buildUrl="Build";
+var buildUrl = "Build";
 
-const config={
-arguments:[],
-dataUrl:buildUrl+"/puzzle.data.unityweb",
-frameworkUrl:buildUrl+"/puzzle.framework.js.unityweb",
-codeUrl:buildUrl+"/puzzle.wasm.unityweb",
-streamingAssetsUrl:"StreamingAssets",
-companyName:"DefaultCompany",
-productName:"Puzzle",
-productVersion:"1.0",
-showBanner:unityShowBanner
+var config = {
+  arguments: [],
+  dataUrl: buildUrl + "/puzzle.data.unityweb",
+  frameworkUrl: buildUrl + "/puzzle.framework.js.unityweb",
+  codeUrl: buildUrl + "/puzzle.wasm.unityweb",
+  streamingAssetsUrl: "StreamingAssets",
+  companyName: "DefaultCompany",
+  productName: "Puzzle",
+  productVersion: "1.0",
+  showBanner: unityShowBanner
 };
 
-function resizeCanvas(){
-const portraitRatio=1080/1920;
-const screenRatio=window.innerWidth/window.innerHeight;
+// A full-DPR framebuffer on a phone (DPR 3 -> 3x the pixels) is the most common
+// way to lose the WebGL context when the canvas is resized mid-render, which
+// shows up as a black screen. Render at 1x on mobile.
+var isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+  (window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+config.devicePixelRatio = Math.min(isMobile ? 1 : 2, Math.max(1, window.devicePixelRatio || 1));
 
-let w,h;
+canvas.addEventListener("webglcontextlost", function (e) { e.preventDefault(); showError("WebGL context lost."); });
 
-if(screenRatio>portraitRatio){
-h=window.innerHeight;
-w=h*portraitRatio;
-}else{
-w=window.innerWidth;
-h=w/portraitRatio;
-}
+var script = document.createElement("script");
+script.src = buildUrl + "/puzzle.loader.js";
 
-canvas.style.width=w+"px";
-canvas.style.height=h+"px";
-}
-
-window.addEventListener("resize",resizeCanvas);
-window.addEventListener("orientationchange",resizeCanvas);
-
-const script=document.createElement("script");
-script.src=buildUrl+"/puzzle.loader.js";
-
-script.onload=()=>{
-createUnityInstance(canvas,config,(progress)=>{
-document.querySelector("#unity-progress-bar-full").style.width=(progress*100)+"%";
-}).then(()=>{
-document.querySelector("#unity-loading-bar").style.display="none";
-resizeCanvas();
-}).catch(alert);
+script.onload = function () {
+  createUnityInstance(canvas, config, function (progress) {
+    document.querySelector("#unity-progress-bar-full").style.width = (progress * 100) + "%";
+  }).then(function () {
+    document.querySelector("#unity-loading-bar").style.display = "none";
+  }).catch(function (err) {
+    showError((err && err.message) || err);
+  });
 };
+script.onerror = function () { showError("Failed to load " + script.src); };
 
 document.body.appendChild(script);
 </script>
