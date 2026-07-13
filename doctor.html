@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Unity WebGL Doctor</title>
+<style>
+  html,body{margin:0;padding:0;background:#0b0b0f;color:#e6e6ea;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  header{position:sticky;top:0;background:#15151d;padding:10px 12px;border-bottom:1px solid #2a2a38}
+  h1{margin:0;font-size:14px}
+  #actions{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+  button{background:#2b6cff;color:#fff;border:0;border-radius:6px;padding:8px 12px;font:inherit;font-weight:600}
+  button.alt{background:#333344}
+  #log{padding:10px 12px;white-space:pre-wrap;word-break:break-word}
+  .ok{color:#4ade80}.bad{color:#f87171}.warn{color:#fbbf24}.dim{color:#8b8b9c}
+  hr{border:0;border-top:1px solid #2a2a38;margin:10px 0}
+  canvas{position:fixed;left:-9999px;top:0;width:320px;height:200px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Unity WebGL Doctor</h1>
+  <div id="actions">
+    <button id="copy">Copy report</button>
+    <button id="boot" class="alt">Boot the game (full test)</button>
+  </div>
+</header>
+<div id="log"></div>
+<canvas id="unity-canvas" tabindex="-1"></canvas>
+
+<script>
+var logEl = document.getElementById('log');
+var lines = [];
+function say(msg, cls) {
+  lines.push(msg);
+  var span = document.createElement('span');
+  if (cls) span.className = cls;
+  span.textContent = msg + '\n';
+  logEl.appendChild(span);
+}
+function rule(){ logEl.appendChild(document.createElement('hr')); lines.push('---'); }
+
+// Capture EVERYTHING. The shipped index.html swallows these, which is why the
+// phone shows a black screen with no explanation.
+window.addEventListener('error', function (e) {
+  say('[window.error] ' + (e.message || e.error || 'unknown') + ' @ ' + (e.filename || '?') + ':' + (e.lineno || '?'), 'bad');
+});
+window.addEventListener('unhandledrejection', function (e) {
+  var r = e.reason;
+  say('[unhandledrejection] ' + ((r && (r.message || r)) || 'unknown'), 'bad');
+});
+var origError = console.error;
+console.error = function () {
+  say('[console.error] ' + Array.prototype.join.call(arguments, ' '), 'bad');
+  return origError.apply(console, arguments);
+};
+
+// ---------- 1. Environment ----------
+say('== ENVIRONMENT ==', 'warn');
+say('url        : ' + location.href);
+say('userAgent  : ' + navigator.userAgent);
+say('platform   : ' + (navigator.platform || '?'));
+say('dpr        : ' + window.devicePixelRatio);
+say('screen     : ' + screen.width + 'x' + screen.height);
+say('viewport   : ' + window.innerWidth + 'x' + window.innerHeight);
+say('deviceMemory   : ' + (navigator.deviceMemory != null ? navigator.deviceMemory + ' GB' : 'n/a'));
+say('cpu threads    : ' + (navigator.hardwareConcurrency || 'n/a'));
+say('secure ctx     : ' + window.isSecureContext);
+say('WebAssembly    : ' + (typeof WebAssembly === 'object' ? 'yes' : 'NO'), typeof WebAssembly === 'object' ? 'ok' : 'bad');
+say('SharedArrayBuf : ' + (typeof SharedArrayBuffer !== 'undefined' ? 'yes' : 'no (fine, build does not need it)'));
+
+rule();
+
+// ---------- 2. WebGL ----------
+say('== WEBGL ==', 'warn');
+var probe = document.createElement('canvas');
+var gl2 = null, gl1 = null;
+try { gl2 = probe.getContext('webgl2'); } catch (e) { say('webgl2 threw: ' + e.message, 'bad'); }
+try { gl1 = probe.getContext('webgl') || probe.getContext('experimental-webgl'); } catch (e) {}
+say('WebGL2RenderingContext exists : ' + (typeof WebGL2RenderingContext !== 'undefined'));
+say('webgl2 context : ' + (gl2 ? 'OK' : 'FAILED'), gl2 ? 'ok' : 'bad');
+say('webgl1 context : ' + (gl1 ? 'OK' : 'FAILED'), gl1 ? 'ok' : 'bad');
+if (!gl2) {
+  say('>>> This build REQUIRES WebGL 2. Without it Unity aborts and the page stays black.', 'bad');
+}
+var gl = gl2 || gl1;
+if (gl) {
+  try {
+    var dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    say('renderer   : ' + (dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)));
+    say('vendor     : ' + (dbg ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR)));
+    say('max texture: ' + gl.getParameter(gl.MAX_TEXTURE_SIZE));
+  } catch (e) { say('renderer probe failed: ' + e.message, 'warn'); }
+}
+
+rule();
+
+// ---------- 3. wasm memory allocation ----------
+say('== MEMORY ==', 'warn');
+try {
+  // The build declares initial 32MB / max 2GB. If the phone cannot reserve this,
+  // Unity dies before it ever paints.
+  var mem = new WebAssembly.Memory({ initial: 512, maximum: 32768 }); // 32MB initial, 2GB max
+  say('reserve 32MB initial / 2GB max wasm heap : OK', 'ok');
+  mem = null;
+} catch (e) {
+  say('reserve 32MB/2GB wasm heap : FAILED -> ' + e.message, 'bad');
+  say('>>> The phone refused the heap the build asks for. This alone causes a black screen.', 'bad');
+}
+
+rule();
+
+// ---------- 4. Assets, using the SAME urls the real index.html uses ----------
+var cfg = null;
+say('== ASSETS ==', 'warn');
+
+function parseIndex(html) {
+  function grab(re) { var m = re.exec(html); return m ? m[1] : null; }
+  var buildUrl = grab(/buildUrl\s*=\s*["']([^"']+)["']/) || 'Build';
+  var c = {
+    buildUrl: buildUrl,
+    loaderUrl: null, dataUrl: null, frameworkUrl: null, codeUrl: null
+  };
+  var loader = grab(/loaderUrl\s*=\s*buildUrl\s*\+\s*["']([^"']+)["']/) || grab(/script\.src\s*=\s*buildUrl\s*\+\s*["']([^"']+)["']/);
+  c.loaderUrl = loader ? buildUrl + loader : null;
+  var d = grab(/dataUrl\s*:\s*buildUrl\s*\+\s*["']([^"']+)["']/);
+  var f = grab(/frameworkUrl\s*:\s*buildUrl\s*\+\s*["']([^"']+)["']/);
+  var w = grab(/codeUrl\s*:\s*buildUrl\s*\+\s*["']([^"']+)["']/);
+  c.dataUrl = d ? buildUrl + d : null;
+  c.frameworkUrl = f ? buildUrl + f : null;
+  c.codeUrl = w ? buildUrl + w : null;
+  return c;
+}
+
+function checkOne(label, url) {
+  if (!url) { say(label + ' : NOT FOUND in index.html', 'bad'); return Promise.resolve(); }
+  var t0 = Date.now();
+  return fetch(url, { cache: 'no-store' }).then(function (res) {
+    var ct = res.headers.get('content-type') || '?';
+    var ce = res.headers.get('content-encoding') || 'none';
+    return res.arrayBuffer().then(function (buf) {
+      var ms = Date.now() - t0;
+      var kb = (buf.byteLength / 1024).toFixed(0);
+      var isHtml = /text\/html/i.test(ct);
+      var msg = label + ' : HTTP ' + res.status + '  ' + kb + ' KB  ' + ms + 'ms  type=' + ct + '  enc=' + ce;
+      say(msg, res.ok && !isHtml ? 'ok' : 'bad');
+      if (isHtml) say('  >>> This URL returned HTML, not the asset. The file is MISSING (Cloudflare served the fallback page).', 'bad');
+    });
+  }).catch(function (e) {
+    say(label + ' : FETCH FAILED -> ' + e.message, 'bad');
+  });
+}
+
+fetch('index.html', { cache: 'no-store' })
+  .then(function (r) { return r.text(); })
+  .then(function (html) {
+    cfg = parseIndex(html);
+    say('buildUrl     : ' + cfg.buildUrl, 'dim');
+    say('loaderUrl    : ' + cfg.loaderUrl, 'dim');
+    say('frameworkUrl : ' + cfg.frameworkUrl, 'dim');
+    say('codeUrl      : ' + cfg.codeUrl, 'dim');
+    say('dataUrl      : ' + cfg.dataUrl, 'dim');
+    say('');
+    return checkOne('loader   ', cfg.loaderUrl)
+      .then(function () { return checkOne('framework', cfg.frameworkUrl); })
+      .then(function () { return checkOne('wasm     ', cfg.codeUrl); })
+      .then(function () { return checkOne('data     ', cfg.dataUrl); });
+  })
+  .then(function () {
+    rule();
+    say('Asset check done. Now press "Boot the game (full test)" above.', 'warn');
+    say('Then press "Copy report" and send me the text.', 'warn');
+  })
+  .catch(function (e) { say('could not read index.html: ' + e.message, 'bad'); });
+
+// ---------- 5. Actually boot Unity, with errors surfaced ----------
+document.getElementById('boot').onclick = function () {
+  this.disabled = true;
+  rule();
+  say('== BOOTING UNITY ==', 'warn');
+  if (!cfg || !cfg.loaderUrl) { say('no config parsed; cannot boot', 'bad'); return; }
+
+  var canvas = document.getElementById('unity-canvas');
+  var s = document.createElement('script');
+  s.src = cfg.loaderUrl;
+  s.onerror = function () { say('loader script FAILED to load: ' + cfg.loaderUrl, 'bad'); };
+  s.onload = function () {
+    say('loader script loaded; createUnityInstance = ' + typeof window.createUnityInstance);
+    if (typeof createUnityInstance !== 'function') { say('createUnityInstance missing!', 'bad'); return; }
+    var last = -1;
+    var t0 = Date.now();
+    createUnityInstance(canvas, {
+      dataUrl: cfg.dataUrl,
+      frameworkUrl: cfg.frameworkUrl,
+      codeUrl: cfg.codeUrl,
+      streamingAssetsUrl: 'StreamingAssets',
+      companyName: 'DefaultCompany',
+      productName: 'Doctor',
+      productVersion: '1.0',
+      // THIS is what the shipped pages hide. Show it.
+      showBanner: function (msg, type) { say('[unity ' + (type || 'msg') + '] ' + msg, type === 'error' ? 'bad' : 'warn'); }
+    }, function (p) {
+      var pct = Math.round(p * 100);
+      if (pct >= last + 10) { last = pct; say('progress ' + pct + '%  (' + ((Date.now() - t0) / 1000).toFixed(1) + 's)', 'dim'); }
+    }).then(function () {
+      say('UNITY STARTED OK in ' + ((Date.now() - t0) / 1000).toFixed(1) + 's', 'ok');
+      say('>>> The engine boots on this phone. The black screen is a page/canvas layout problem, not an engine failure.', 'ok');
+    }).catch(function (err) {
+      say('UNITY FAILED: ' + ((err && err.message) || err), 'bad');
+    });
+  };
+  document.body.appendChild(s);
+};
+
+document.getElementById('copy').onclick = function () {
+  var text = lines.join('\n');
+  var btn = this;
+  function done() { btn.textContent = 'Copied!'; setTimeout(function () { btn.textContent = 'Copy report'; }, 1500); }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done, function () { window.prompt('Copy this:', text); });
+  } else {
+    window.prompt('Copy this:', text);
+  }
+};
+</script>
+</body>
+</html>
