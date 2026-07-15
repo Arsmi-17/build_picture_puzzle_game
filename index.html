@@ -1,138 +1,178 @@
 <!DOCTYPE html>
-<html lang="en-us">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,height=device-height,initial-scale=1,user-scalable=no,viewport-fit=cover">
-<title>Unity Web Player | Puzzle</title>
-<style>
-html,body{
-margin:0;padding:0;width:100%;height:100%;
-overflow:hidden;background:#000;
-}
-#unity-container{
-position:fixed;inset:0;
-overflow:hidden;
-background:#000;
-}
-/* Fill the frame edge to edge. The old shell pinned the canvas to a 1080x1920
-   box, which left black bars filling the rest of the screen. */
-#unity-canvas{
-display:block;
-width:100%;
-height:100%;
-background:#000;
-}
-#unity-loading-bar{
-position:absolute;
-left:50%;top:50%;
-transform:translate(-50%,-50%);
-color:#fff;
-font-family:Arial,sans-serif;
-text-align:center;
-}
-#unity-error{
-position:absolute;
-left:50%;top:50%;
-transform:translate(-50%,-50%);
-display:none;
-max-width:88%;
-padding:14px 16px;
-border-radius:10px;
-background:#7f1d1d;
-color:#fff;
-font:13px/1.5 Arial,sans-serif;
-}
-</style>
-</head>
-<body>
+<!--
+  data-orientation is stamped into this file by the build (Arsmi Games -> Build WebGL, which
+  asks portrait or landscape). The value below is only the default, for a build made some
+  other way.
 
-<div id="unity-container">
-<canvas id="unity-canvas" tabindex="-1"></canvas>
+  It is written afterwards, by the post-processor, rather than by one of Unity's own template
+  macros: Unity evaluates those against a fixed set of names it knows, and a name it does not
+  know fails the build instead of producing an empty string.
 
-<div id="unity-loading-bar">
-Loading...
-<div style="width:200px;height:8px;background:#333;margin-top:10px;">
-<div id="unity-progress-bar-full" style="height:100%;width:0%;background:#fff;"></div>
-</div>
-</div>
+  Nothing in this file may contain a Unity macro delimiter - three braces - not even inside a
+  comment like this one. The preprocessor scans the raw text, so it finds them in comments
+  too, and evaluates whatever sits between them. This very comment used to name the delimiter
+  literally, which made Unity try to evaluate the expression " " and fail the build with
+  "Cannot read property 'toString' of undefined" - an error that points at the file but not
+  at the sentence.
+-->
+<html lang="en-us" data-orientation="portrait">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
 
-<div id="unity-error"></div>
-</div>
+    <!--
+      Static, not injected from JS.
 
-<script>
-var canvas = document.querySelector("#unity-canvas");
-var errorBox = document.querySelector("#unity-error");
+      This used to be appended to <head> from script, which is after the browser has already
+      laid the page out once — so on a notched phone the first frame is laid out against the
+      wrong viewport and the canvas is the wrong size until something forces a reflow.
+      viewport-fit=cover is what lets the canvas reach under the notch instead of being
+      letterboxed by the safe area.
+    -->
+    <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
 
-// Tell the embedding platform how far along we are. Without this it can only see
-// the iframe's load event -- which fires long before the engine has downloaded
-// and compiled -- so it hides its loading screen and the player sees a black
-// frame until Unity finally paints.
-function postToPlatform(type, payload) {
-  try {
-    if (window.parent && window.parent !== window) {
-      var msg = { type: type, ts: Date.now(), version: 1 };
-      for (var k in (payload || {})) msg[k] = payload[k];
-      window.parent.postMessage(msg, "*");
-    }
-  } catch (e) { /* not embedded, or blocked */ }
-}
+    <title>Puzzle</title>
 
-// Never swallow engine errors. The previous shell logged them to the console
-// only, so a failure on a phone looked like an unexplained black screen.
-function showError(msg) {
-  errorBox.style.display = "block";
-  errorBox.textContent = String(msg);
-  postToPlatform("gamehub:unity:error", { error: String(msg) });
-}
-function unityShowBanner(msg, type) {
-  if (type === "error") showError(msg);
-  console.log(msg);
-}
-window.addEventListener("error", function (e) { showError(e.message || "Runtime error"); });
+    <!--
+      The platform SDK. Without it the game cannot talk to Arsmi Games at all:
+      GameHubBridge.jslib only wires itself up if window.GameHubSDK already exists,
 
-var buildUrl = "Build";
+          if (!window.GameHubBridge && window.GameHubSDK) { ...create... }
 
-var config = {
-  arguments: [],
-  dataUrl: buildUrl + "/puzzle.data.unityweb",
-  frameworkUrl: buildUrl + "/puzzle.framework.js.unityweb",
-  codeUrl: buildUrl + "/puzzle.wasm.unityweb",
-  streamingAssetsUrl: "StreamingAssets",
-  companyName: "DefaultCompany",
-  productName: "Puzzle",
-  productVersion: "1.0",
-  showBanner: unityShowBanner
-};
+      so with no SDK on the page, window.GameHubBridge is never created, every Emit
+      from C# is a silent no-op, and no listeners are installed. The game neither
+      sends nor receives anything — and nothing errors to tell you why.
 
-// A full-DPR framebuffer on a phone (DPR 3 -> 3x the pixels) is the most common
-// way to lose the WebGL context when the canvas is resized mid-render, which
-// shows up as a black screen. Render at 1x on mobile.
-var isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
-  (window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
-config.devicePixelRatio = Math.min(isMobile ? 1 : 2, Math.max(1, window.devicePixelRatio || 1));
+      Two sources, in order:
 
-canvas.addEventListener("webglcontextlost", function (e) { e.preventDefault(); showError("WebGL context lost."); });
+      1. /sdk/gamehub-sdk.js — the platform's own copy, always current. This only
+         resolves when the platform is serving the build (/unity/<slug>/...), because
+         the path is absolute.
 
-var script = document.createElement("script");
-script.src = buildUrl + "/puzzle.loader.js";
+      2. gamehub-sdk.js — the copy that ships inside this build. Needed because a
+         build hosted ANYWHERE else (a static host, Cloudflare Pages, file://) would
+         resolve the absolute path against that host and get a 404.
 
-postToPlatform("gamehub:unity:progress", { progress: 0 });
+      document.write is deliberate: it is synchronous, so the SDK is guaranteed to be
+      defined before the Unity loader runs. C# Awake() calls straight into the bridge,
+      so "eventually loaded" is not good enough.
+    -->
+    <script src="/sdk/gamehub-sdk.js"></script>
+    <script>
+      if (!window.GameHubSDK) {
+        document.write('<script src="gamehub-sdk.js"><\/script>');
+      }
+    </script>
 
-script.onload = function () {
-  createUnityInstance(canvas, config, function (progress) {
-    document.querySelector("#unity-progress-bar-full").style.width = (progress * 100) + "%";
-    postToPlatform("gamehub:unity:progress", { progress: progress });
-  }).then(function () {
-    document.querySelector("#unity-loading-bar").style.display = "none";
-    postToPlatform("gamehub:unity:ready", {});
-  }).catch(function (err) {
-    showError((err && err.message) || err);
-  });
-};
-script.onerror = function () { showError("Failed to load " + script.src); };
+    <style>
+      html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#000}
+      #unity-container{position:fixed;inset:0;width:100vw;height:100vh;overflow:hidden}
+      #unity-canvas{display:block;width:100%!important;height:100%!important;background:#000}
+      #unity-loading-bar{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:none}
+      #unity-progress-bar-empty{width:200px;height:6px;background:#1c1b20;border-radius:3px;overflow:hidden}
+      #unity-progress-bar-full{width:0;height:100%;background:#cc785c}
+      #unity-footer{display:none!important}
+      #unity-warning{position:absolute;left:50%;top:5%;transform:translate(-50%);background:#000;color:#fff}
+    </style>
+  </head>
+  <body>
+    <div id="unity-container">
+      <canvas id="unity-canvas" width=960 height=600 tabindex="-1"></canvas>
+      <div id="unity-loading-bar">
+        <div id="unity-progress-bar-empty">
+          <div id="unity-progress-bar-full"></div>
+        </div>
+      </div>
+      <div id="unity-warning"></div>
+      <div id="unity-footer"></div>
+    </div>
 
-document.body.appendChild(script);
-</script>
+    <script>
+      var canvas = document.querySelector("#unity-canvas");
 
-</body>
+      // Report engine progress to the platform. Without this it can only see the
+      // iframe's load event, which fires long before the wasm has downloaded and
+      // compiled — so it would hide its loading screen and leave the player
+      // staring at a black frame until Unity finally paints.
+      function postToPlatform(type, payload) {
+        try {
+          if (window.parent && window.parent !== window) {
+            var msg = { type: type, ts: Date.now(), version: 1 };
+            for (var k in (payload || {})) msg[k] = payload[k];
+            window.parent.postMessage(msg, "*");
+          }
+        } catch (e) { /* not embedded, or blocked */ }
+      }
+      postToPlatform("gamehub:unity:progress", { progress: 0 });
+
+      function unityShowBanner(msg, type) {
+        var warningBanner = document.querySelector("#unity-warning");
+        function updateBannerVisibility() {
+          warningBanner.style.display = warningBanner.children.length ? 'block' : 'none';
+        }
+        var div = document.createElement('div');
+        div.innerHTML = msg;
+        warningBanner.appendChild(div);
+        if (type == 'error') div.style = 'background: red; padding: 10px;';
+        else {
+          if (type == 'warning') div.style = 'background: yellow; padding: 10px;';
+          setTimeout(function () {
+            warningBanner.removeChild(div);
+            updateBannerVisibility();
+          }, 5000);
+        }
+        updateBannerVisibility();
+      }
+
+      var buildUrl = "Build";
+      var loaderUrl = buildUrl + "/puzzle.loader.js";
+      var config = {
+        arguments: [],
+        dataUrl: buildUrl + "/puzzle.data.unityweb",
+        frameworkUrl: buildUrl + "/puzzle.framework.js.unityweb",
+        codeUrl: buildUrl + "/puzzle.wasm.unityweb",
+        streamingAssetsUrl: "StreamingAssets",
+        companyName: "DefaultCompany",
+        productName: "Puzzle",
+        productVersion: "1.0",
+        showBanner: unityShowBanner,
+        devicePixelRatio: Math.min(
+          (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+            (window.matchMedia && window.matchMedia('(pointer: coarse)').matches)) ? 1 : 2,
+          Math.max(1, window.devicePixelRatio || 1)
+        ),
+      };
+
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
+
+      document.querySelector("#unity-loading-bar").style.display = "block";
+      canvas.addEventListener('webglcontextlost', function (e) {
+        e.preventDefault();
+        unityShowBanner('WebGL context lost.', 'error');
+      });
+
+      var script = document.createElement("script");
+      script.src = loaderUrl;
+      script.onload = function () {
+        createUnityInstance(canvas, config, function (progress) {
+          document.querySelector("#unity-progress-bar-full").style.width = 100 * progress + "%";
+          postToPlatform("gamehub:unity:progress", { progress: progress });
+        }).then(function (unityInstance) {
+          document.querySelector("#unity-loading-bar").style.display = "none";
+          window.unityInstance = unityInstance;
+          // Tell the platform what this build was actually made for. It already has an
+          // orientation on the game record, typed in by whoever uploaded it; this is the
+          // build answering for itself, so the two can be compared instead of trusted.
+          postToPlatform("gamehub:unity:ready", {
+            orientation: document.documentElement.getAttribute("data-orientation") || "landscape",
+          });
+        }).catch(function (message) {
+          postToPlatform("gamehub:unity:error", { error: String(message) });
+          unityShowBanner(message, 'error');
+        });
+      };
+      document.body.appendChild(script);
+    </script>
+  </body>
 </html>
